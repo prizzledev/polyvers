@@ -1,0 +1,19 @@
+[package]
+name = "polyvers-macros"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Procedural macro implementation for the polyvers crate. Do not depend on directly; depend on polyvers."
+license = "MIT"
+repository = "https://github.com/prizzledev/polyvers"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"
+proc-macro2 = "1"
+
+[dev-dependencies]
+quote = "1"

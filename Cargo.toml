@@ -1,0 +1,20 @@
+[workspace]
+members = ["polyvers-macros"]
+resolver = "3"
+
+[package]
+name = "polyvers"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Single-macro schema versioning for Rust: declare a struct family with #[add]/#[edit]/#[delete] mutations across versions and parse them at runtime without serde(flatten) overhead."
+license = "MIT"
+repository = "https://github.com/prizzledev/polyvers"
+keywords = ["serde", "versioning", "schema", "macro"]
+categories = ["data-structures", "encoding", "config"]
+
+[dependencies]
+polyvers-macros = { version = "=0.1.0", path = "polyvers-macros" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
