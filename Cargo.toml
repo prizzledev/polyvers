@@ -4,7 +4,7 @@ resolver = "3"
 
 [package]
 name = "polyvers"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.85"
 description = "Single-macro schema versioning for Rust: declare a struct family with #[add]/#[edit]/#[delete] mutations across versions and parse them at runtime without serde(flatten) overhead. Optional binary codecs: rkyv, bincode, postcard."
@@ -21,7 +21,7 @@ bincode-2 = ["polyvers-macros/bincode-2"]
 postcard-1 = ["polyvers-macros/postcard-1"]
 
 [dependencies]
-polyvers-macros = { version = "=0.1.1", path = "polyvers-macros" }
+polyvers-macros = { version = "=0.1.2", path = "polyvers-macros" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

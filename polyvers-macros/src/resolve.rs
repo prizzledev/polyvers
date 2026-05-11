@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use proc_macro2::Span;
-use syn::{Attribute, Ident, LitStr, Path, Type};
+use syn::{Attribute, Expr, Ident, LitStr, Path, Type};
 
 use crate::parse::{CodecDecl, MetaInit, StructDef, StructItem, VersionDef, VersionedSpec};
 
@@ -32,6 +32,12 @@ pub struct ResolvedField {
     pub attrs: Vec<Attribute>,
     pub name: Ident,
     pub ty: Type,
+    /// Optional migration default, set by `#[add(default = <expr>)]` in the
+    /// version that introduces the field. Consumed by codegen when emitting
+    /// the auto-`From<prev> for current` impl for that hop. `None` means the
+    /// auto-From falls back to `Default::default()` (so the field's type must
+    /// implement `Default`).
+    pub default: Option<Expr>,
 }
 
 pub fn resolve(spec: VersionedSpec) -> Result<ResolvedSpec, syn::Error> {
@@ -213,6 +219,7 @@ fn collect_base_fields(sd: &StructDef, errors: &mut Vec<syn::Error>) -> Vec<Reso
                     attrs: attrs.clone(),
                     name: name.clone(),
                     ty: ty.clone(),
+                    default: None,
                 });
             }
             StructItem::Add { .. } | StructItem::Edit { .. } | StructItem::Delete { .. } => {
@@ -252,7 +259,11 @@ fn apply_mutations(
                 ));
             }
             StructItem::Add {
-                attrs, name, ty, ..
+                attrs,
+                name,
+                ty,
+                default,
+                ..
             } => {
                 if !seen_mutations.insert(name.to_string()) {
                     errors.push(syn::Error::new(
@@ -275,6 +286,7 @@ fn apply_mutations(
                     attrs: attrs.clone(),
                     name: name.clone(),
                     ty: ty.clone(),
+                    default: default.clone(),
                 });
             }
             StructItem::Edit {

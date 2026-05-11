@@ -88,6 +88,11 @@ pub enum StructItem {
         attrs: Vec<Attribute>,
         name: Ident,
         ty: Type,
+        /// Optional initialiser for auto-generated `From<prev> for current`
+        /// migrations. Set via `#[add(default = <expr>)]`. When `None`, the
+        /// auto-From falls back to `Default::default()`, which means the
+        /// field's type must implement `Default`.
+        default: Option<Expr>,
     },
     Edit {
         marker_span: Span,
@@ -285,7 +290,7 @@ impl Parse for StructItem {
                     ty,
                 })
             }
-            Some(Marker::Add(marker_span)) => {
+            Some(Marker::Add { span: marker_span, default }) => {
                 let name: Ident = input.parse()?;
                 let _: Token![:] = input.parse()?;
                 let ty: Type = input.parse()?;
@@ -294,6 +299,7 @@ impl Parse for StructItem {
                     attrs: other_attrs,
                     name,
                     ty,
+                    default,
                 })
             }
             Some(Marker::Edit(marker_span)) => {
@@ -327,16 +333,17 @@ impl Parse for StructItem {
 }
 
 enum Marker {
-    Add(Span),
+    Add { span: Span, default: Option<Expr> },
     Edit(Span),
     Delete(Span),
 }
 
 fn match_marker(attr: &Attribute) -> syn::Result<Option<Marker>> {
     let path = attr.path();
-    let kind = if path.is_ident("add") {
-        Marker::Add(attr.span())
-    } else if path.is_ident("edit") {
+    if path.is_ident("add") {
+        return Ok(Some(parse_add_marker(attr)?));
+    }
+    let kind = if path.is_ident("edit") {
         Marker::Edit(attr.span())
     } else if path.is_ident("delete") {
         Marker::Delete(attr.span())
@@ -345,16 +352,57 @@ fn match_marker(attr: &Attribute) -> syn::Result<Option<Marker>> {
     };
     if !matches!(attr.meta, syn::Meta::Path(_)) {
         let name = match &kind {
-            Marker::Add(_) => "add",
             Marker::Edit(_) => "edit",
             Marker::Delete(_) => "delete",
+            Marker::Add { .. } => unreachable!("add is handled above"),
         };
         return Err(syn::Error::new_spanned(
             attr,
-            format!("`#[{name}]` does not take arguments in polyvers v0.1.0"),
+            format!("`#[{name}]` does not take arguments in polyvers v0.1.x"),
         ));
     }
     Ok(Some(kind))
+}
+
+/// Parse an `#[add]` attribute, optionally with a `default = <expr>` argument
+/// that the codegen pipes into the auto-generated `From<prev> for current`
+/// impl. Without `default`, the auto-From falls back to `Default::default()`.
+fn parse_add_marker(attr: &Attribute) -> syn::Result<Marker> {
+    let span = attr.span();
+    match &attr.meta {
+        syn::Meta::Path(_) => Ok(Marker::Add { span, default: None }),
+        syn::Meta::List(list) => {
+            // Expect a single `default = <expr>` inside the parens.
+            let default: AddDefault = syn::parse2(list.tokens.clone())?;
+            Ok(Marker::Add {
+                span,
+                default: Some(default.expr),
+            })
+        }
+        syn::Meta::NameValue(_) => Err(syn::Error::new_spanned(
+            attr,
+            "`#[add]` takes either no arguments or `#[add(default = <expr>)]`",
+        )),
+    }
+}
+
+struct AddDefault {
+    expr: Expr,
+}
+
+impl Parse for AddDefault {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let ident: Ident = input.parse()?;
+        if ident != "default" {
+            return Err(syn::Error::new(
+                ident.span(),
+                "`#[add(...)]` only accepts a `default = <expr>` argument",
+            ));
+        }
+        let _: Token![=] = input.parse()?;
+        let expr: Expr = input.parse()?;
+        Ok(AddDefault { expr })
+    }
 }
 
 #[cfg(test)]

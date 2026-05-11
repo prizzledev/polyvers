@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.1.2
+
+### Added
+
+- `pub const FIELD_COUNT: usize` emitted inside every per-version module,
+  carrying the field count of the family's main struct. Downstream parsers
+  can dispatch on the on-wire length without redeclaring the count
+  alongside the macro invocation.
+- Auto-`impl From<v_prev::Struct> for v_curr::Struct` for every shared
+  struct on every `#[add]`-only hop. The codegen bridges family-internal
+  types across the version boundary (`.into()` for direct references,
+  `.map(Into::into)` for `Option<T>`, `.into_iter().map(Into::into).collect()`
+  for `Vec<T>`). Hops with `#[edit]` / `#[delete]` are deliberately skipped;
+  the user writes a manual `From` and the chain picks it up.
+- `pub fn AnyVersion::into_latest(self) -> Latest` emitted when the main
+  struct's chain is fully auto-emittable from end to end. Walks the
+  auto-generated `From` impls one hop at a time, so v0.1 → v0.3 routes
+  through the intermediate v0.2 step.
+- `#[add(default = <expr>)]` syntax. The expression is used verbatim to
+  populate the added field in the auto-`From` migration. Without the
+  attribute, the codegen falls back to `::core::default::Default::default()`
+  — so `Added` field types need `Default` (typically satisfied by adding
+  `Default` to the family `derive(...)` list).
+
+### Notes
+
+- Auto-`From` for a struct is only emitted when every family struct it
+  transitively references is also auto-emittable on the same hop (computed
+  by a fixed-point pass). This guarantees the carried `.into()` calls
+  never dangle.
+- The `into_latest` emission is gated on the *main* struct's entire chain
+  being clean. If any hop has a `#[edit]` / `#[delete]` on the main
+  struct, `into_latest` is not emitted and the user writes their own.
+
 ## 0.1.1
 
 ### Added

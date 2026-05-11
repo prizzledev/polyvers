@@ -1,6 +1,6 @@
 [package]
 name = "polyvers-macros"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.85"
 description = "Procedural macro implementation for the polyvers crate. Do not depend on directly; depend on polyvers."

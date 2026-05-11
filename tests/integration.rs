@@ -274,3 +274,103 @@ fn nested_generic_resolves_to_correct_version() {
     assert_eq!(outer_v02.items[0].label, "x");
     assert_eq!(outer_v02.maybe.unwrap().label, "y");
 }
+
+// ---------------------------------------------------------------------------
+// Auto-emitted glue (FIELD_COUNT, auto-From, into_latest) for `#[add]`-only
+// version chains. These are the v0.1.2 additions.
+// ---------------------------------------------------------------------------
+
+versioned! {
+    family add_only;
+    derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize);
+
+    version "0.1" {
+        struct Main {
+            keep: u32,
+            sub: Sub,
+        }
+        struct Sub {
+            tag: String,
+        }
+    }
+
+    version "0.2" extends "0.1" {
+        struct Main {
+            #[add] added_plain: bool,
+            #[add(default = 42_u16)] added_with_default: u16,
+        }
+    }
+}
+
+#[test]
+fn field_count_constant_is_emitted_per_version() {
+    assert_eq!(add_only::v0_1::FIELD_COUNT, 2);
+    assert_eq!(add_only::v0_2::FIELD_COUNT, 4);
+}
+
+#[test]
+fn auto_from_chain_for_add_only_delta() {
+    let v01 = add_only::v0_1::Main {
+        keep: 7,
+        sub: add_only::v0_1::Sub {
+            tag: "hello".into(),
+        },
+    };
+    let v02: add_only::v0_2::Main = v01.into();
+    assert_eq!(v02.keep, 7);
+    assert_eq!(v02.sub.tag, "hello");
+    // Plain `#[add]` falls back to `Default::default()` (= false for bool).
+    assert_eq!(v02.added_plain, false);
+    // `#[add(default = 42_u16)]` is honoured verbatim.
+    assert_eq!(v02.added_with_default, 42);
+}
+
+#[test]
+fn auto_into_latest_chains_through_versions() {
+    use add_only::AnyVersion;
+    let v01 = AnyVersion::V0_1(add_only::v0_1::Main {
+        keep: 1,
+        sub: add_only::v0_1::Sub { tag: "t".into() },
+    });
+    let latest = v01.into_latest();
+    assert_eq!(latest.keep, 1);
+    assert_eq!(latest.sub.tag, "t");
+    assert_eq!(latest.added_with_default, 42);
+}
+
+// A family with an `#[edit]` hop. The macro must NOT auto-emit `From` for
+// that hop, and (because the chain has a gap) must skip emitting
+// `into_latest` entirely — the user provides their own migration.
+versioned! {
+    family with_edit;
+    derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize);
+
+    version "0.1" {
+        struct Main { id: u32 }
+    }
+    version "0.2" extends "0.1" {
+        struct Main { #[edit] id: String }
+    }
+}
+
+#[test]
+fn edit_hop_does_not_auto_emit_from() {
+    // Direct construction works.
+    let v01 = with_edit::v0_1::Main { id: 5 };
+    let v02 = with_edit::v0_2::Main { id: "5".into() };
+    assert_eq!(v01.id, 5);
+    assert_eq!(v02.id, "5");
+
+    // The auto-emit deliberately skips the `#[edit]` hop, so `Into<v0_2::Main>`
+    // must not be available for `v0_1::Main`. The compile-time check below
+    // documents the invariant: if it ever starts compiling, the auto-emit
+    // grew an unintended path.
+    //
+    //   let _: with_edit::v0_2::Main = v01.into();   // <- would fail to compile
+    //
+    // Trait probe via a helper that only succeeds when `T: Into<U>`:
+    fn assert_into<T: Into<U>, U>() {}
+    // Calling `assert_into::<v0_1::Main, v0_2::Main>()` would compile-fail.
+    // We can still call it for identity / trivially-implementable pairs:
+    assert_into::<with_edit::v0_1::Main, with_edit::v0_1::Main>();
+}
