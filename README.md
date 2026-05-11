@@ -71,9 +71,47 @@ For `family the_config`, the macro emits:
 | `the_config::AnyVersion`          | Enum with one variant per version wrapping that version's main. |
 | `the_config::VERSIONS`            | `&[&str]` of declared version strings.                       |
 | `the_config::LATEST_VERSION`      | The last version string.                                     |
-| `the_config::parse_at_version(v, json)` | Runtime version dispatch into `AnyVersion`. JSON only in v0.1.0. |
+| `the_config::parse_at_version(v, json)` | Runtime version dispatch into `AnyVersion` from a JSON string. |
 
 `AnyVersion` exposes `.version()`, `.into_v0_X()`, `.as_v0_X()` per version.
+
+## Binary codecs (rkyv, bincode, postcard)
+
+JSON is the default runtime format. For binary formats, add a `codec` clause and enable the matching cargo feature on `polyvers`. The macro then emits a `parse_at_version_<codec>(version, bytes)` free function and a `to_<codec>_bytes()` method on `AnyVersion`. The JSON dispatcher coexists.
+
+```rust
+polyvers::versioned! {
+    family payload;
+    derive(
+        Debug, Clone, serde::Serialize, serde::Deserialize,
+        rkyv::Archive, rkyv::Serialize, rkyv::Deserialize,
+    );
+    codec rkyv, bincode, postcard;   // any subset; comma-separated
+
+    version "0.1" { struct Main { id: u32, data: Vec<u8> } }
+    version "0.2" extends "0.1" { struct Main { #[edit] id: String } }
+}
+
+// Serialize/parse via each enabled codec:
+let any = payload::AnyVersion::V0_1(payload::v0_1::Main { id: 7, data: vec![] });
+let b = any.to_bincode_bytes()?;
+let p = any.to_postcard_bytes()?;
+let r = any.to_rkyv_bytes()?;
+let same = payload::parse_at_version_rkyv("0.1", &r)?;
+```
+
+Cargo features:
+
+| Feature      | Pulls in the user's `…` dependency | Generated fns                                  |
+|--------------|------------------------------------|------------------------------------------------|
+| `rkyv-08`    | `rkyv = "0.8"`                     | `parse_at_version_rkyv` / `to_rkyv_bytes`      |
+| `rkyv-07`    | `rkyv = "0.7"` (legacy API)        | `parse_at_version_rkyv` / `to_rkyv_bytes`      |
+| `bincode-2`  | `bincode = "2"` (`serde` feature)  | `parse_at_version_bincode` / `to_bincode_bytes`|
+| `postcard-1` | `postcard = "1"` (`alloc` feature) | `parse_at_version_postcard` / `to_postcard_bytes` |
+
+Enable `rkyv-08` xor `rkyv-07` — not both. Using `codec rkyv;` without either feature produces a clear compile-time error pointing at the missing feature.
+
+Because the JSON dispatcher is always emitted, structs in a family that declares any codec must also derive `serde::Serialize` + `serde::Deserialize`. The future plan is to make the JSON dispatcher opt-out via `codec json;` for binary-only families.
 
 ## Per-version metadata
 
@@ -144,9 +182,9 @@ Version literals become module/method names by replacing `.` with `_` and prefix
 
 Two literals that mangle to the same identifier (e.g., `"0.1"` and `"0_1"`) are rejected at compile time.
 
-## Limitations (v0.1.0)
+## Limitations (v0.1.1)
 
-- JSON is the only supported runtime format. TOML/YAML come later behind cargo features.
+- JSON is always emitted; binary codecs are additive via the `codec` clause + cargo feature. TOML/YAML may come later.
 - No automatic migrations between versions. (`From<v0_1::Main> for v0_2::Main` is on the v0.2.0 roadmap with `#[add(default = ...)]` and `#[edit(from = path)]` hints.)
 - No generic type parameters on family structs.
 - No visibility modifiers on fields — all generated fields are `pub`.
@@ -162,6 +200,7 @@ Runnable examples live in [`examples/`](examples). Run any of them with `cargo r
 - [`manual_migration`](examples/manual_migration.rs) — implementing `From<v0_1::Main> for v0_2::Main` by hand (auto-derived migrations land in v0.2.0).
 - [`runtime_dispatch`](examples/runtime_dispatch.rs) — reading the version out of a JSON file and dispatching across `AnyVersion`.
 - [`version_meta`](examples/version_meta.rs) — attaching per-version metadata (release date, author, notes) via the `meta` clause.
+- [`codec_rkyv`](examples/codec_rkyv.rs) — round-tripping versioned data through rkyv. Run with `cargo run --features rkyv-08 --example codec_rkyv`.
 
 ## License
 

@@ -1,6 +1,6 @@
 [package]
 name = "polyvers-macros"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Procedural macro implementation for the polyvers crate. Do not depend on directly; depend on polyvers."
@@ -9,6 +9,13 @@ repository = "https://github.com/prizzledev/polyvers"
 
 [lib]
 proc-macro = true
+
+[features]
+default = []
+rkyv-08 = []
+rkyv-07 = []
+bincode-2 = []
+postcard-1 = []
 
 [dependencies]
 syn = { version = "2", features = ["full", "extra-traits"] }

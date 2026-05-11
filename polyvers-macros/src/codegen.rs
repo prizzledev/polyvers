@@ -2,7 +2,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{Ident, Path};
 
-use crate::parse::MetaInit;
+use crate::parse::{Codec, CodecDecl, MetaInit};
 use crate::resolve::{ResolvedSpec, ResolvedStruct, ResolvedVersion};
 
 pub fn generate(spec: &ResolvedSpec) -> TokenStream {
@@ -129,6 +129,14 @@ pub fn generate(spec: &ResolvedSpec) -> TokenStream {
 
     let any_derives = build_any_derives(&spec.derives);
 
+    let codec_artifacts: Vec<CodecArtifact> = spec
+        .codecs
+        .iter()
+        .map(|c| emit_codec(c, &spec.versions, &main_struct_name))
+        .collect();
+    let codec_parse_fns = codec_artifacts.iter().map(|a| &a.parse_fn);
+    let codec_serialize_methods = codec_artifacts.iter().map(|a| &a.serialize_method);
+
     quote! {
         pub mod #family {
             #(#version_modules)*
@@ -152,6 +160,8 @@ pub fn generate(spec: &ResolvedSpec) -> TokenStream {
                 #(#any_helpers)*
 
                 #any_version_meta_fn
+
+                #(#codec_serialize_methods)*
             }
 
             pub fn parse_at_version(
@@ -167,7 +177,234 @@ pub fn generate(spec: &ResolvedSpec) -> TokenStream {
             }
 
             #meta_at_version_fn
+
+            #(#codec_parse_fns)*
         }
+    }
+}
+
+struct CodecArtifact {
+    parse_fn: TokenStream,
+    serialize_method: TokenStream,
+}
+
+fn emit_codec(decl: &CodecDecl, versions: &[ResolvedVersion], main: &Ident) -> CodecArtifact {
+    match decl.codec {
+        Codec::Rkyv => emit_rkyv(decl, versions, main),
+        Codec::Bincode => emit_bincode(decl, versions, main),
+        Codec::Postcard => emit_postcard(decl, versions, main),
+    }
+}
+
+fn emit_rkyv(decl: &CodecDecl, versions: &[ResolvedVersion], main: &Ident) -> CodecArtifact {
+    if cfg!(feature = "rkyv-08") {
+        emit_rkyv_08(versions, main)
+    } else if cfg!(feature = "rkyv-07") {
+        emit_rkyv_07(versions, main)
+    } else {
+        emit_missing_feature(decl.span, "rkyv", "rkyv-08", &["rkyv-08", "rkyv-07"])
+    }
+}
+
+fn emit_rkyv_08(versions: &[ResolvedVersion], main: &Ident) -> CodecArtifact {
+    let parse_arms = versions.iter().map(|v| {
+        let variant = pascal_variant_for(&v.module_ident);
+        let module = &v.module_ident;
+        let value = v.version.value();
+        quote! {
+            #value => ::rkyv::from_bytes::<#module::#main, ::rkyv::rancor::Error>(bytes)
+                .map(AnyVersion::#variant)
+                .map_err(::polyvers::Error::format),
+        }
+    });
+    let ser_arms = versions.iter().map(|v| {
+        let variant = pascal_variant_for(&v.module_ident);
+        quote! {
+            AnyVersion::#variant(value) => ::rkyv::to_bytes::<::rkyv::rancor::Error>(value)
+                .map(|av| av.to_vec())
+                .map_err(::polyvers::Error::format),
+        }
+    });
+    CodecArtifact {
+        parse_fn: quote! {
+            pub fn parse_at_version_rkyv(
+                version: &str,
+                bytes: &[u8],
+            ) -> ::core::result::Result<AnyVersion, ::polyvers::Error> {
+                match version {
+                    #(#parse_arms)*
+                    other => ::core::result::Result::Err(
+                        ::polyvers::Error::unknown_version(other, VERSIONS)
+                    ),
+                }
+            }
+        },
+        serialize_method: quote! {
+            pub fn to_rkyv_bytes(&self) -> ::core::result::Result<::std::vec::Vec<u8>, ::polyvers::Error> {
+                match self {
+                    #(#ser_arms)*
+                }
+            }
+        },
+    }
+}
+
+fn emit_rkyv_07(versions: &[ResolvedVersion], main: &Ident) -> CodecArtifact {
+    let parse_arms = versions.iter().map(|v| {
+        let variant = pascal_variant_for(&v.module_ident);
+        let module = &v.module_ident;
+        let value = v.version.value();
+        quote! {
+            #value => ::rkyv::from_bytes::<#module::#main>(bytes)
+                .map(AnyVersion::#variant)
+                .map_err(|e| ::polyvers::Error::format_str(::std::format!("{e}"))),
+        }
+    });
+    let ser_arms = versions.iter().map(|v| {
+        let variant = pascal_variant_for(&v.module_ident);
+        quote! {
+            AnyVersion::#variant(value) => ::rkyv::to_bytes::<_, 256>(value)
+                .map(|av| av.to_vec())
+                .map_err(|e| ::polyvers::Error::format_str(::std::format!("{e}"))),
+        }
+    });
+    CodecArtifact {
+        parse_fn: quote! {
+            pub fn parse_at_version_rkyv(
+                version: &str,
+                bytes: &[u8],
+            ) -> ::core::result::Result<AnyVersion, ::polyvers::Error> {
+                match version {
+                    #(#parse_arms)*
+                    other => ::core::result::Result::Err(
+                        ::polyvers::Error::unknown_version(other, VERSIONS)
+                    ),
+                }
+            }
+        },
+        serialize_method: quote! {
+            pub fn to_rkyv_bytes(&self) -> ::core::result::Result<::std::vec::Vec<u8>, ::polyvers::Error> {
+                match self {
+                    #(#ser_arms)*
+                }
+            }
+        },
+    }
+}
+
+fn emit_bincode(decl: &CodecDecl, versions: &[ResolvedVersion], main: &Ident) -> CodecArtifact {
+    if !cfg!(feature = "bincode-2") {
+        return emit_missing_feature(decl.span, "bincode", "bincode-2", &["bincode-2"]);
+    }
+    let parse_arms = versions.iter().map(|v| {
+        let variant = pascal_variant_for(&v.module_ident);
+        let module = &v.module_ident;
+        let value = v.version.value();
+        quote! {
+            #value => ::bincode::serde::decode_from_slice::<#module::#main, _>(
+                bytes, ::bincode::config::standard()
+            )
+                .map(|(v, _)| AnyVersion::#variant(v))
+                .map_err(::polyvers::Error::format),
+        }
+    });
+    let ser_arms = versions.iter().map(|v| {
+        let variant = pascal_variant_for(&v.module_ident);
+        quote! {
+            AnyVersion::#variant(value) => ::bincode::serde::encode_to_vec(
+                value, ::bincode::config::standard()
+            ).map_err(::polyvers::Error::format),
+        }
+    });
+    CodecArtifact {
+        parse_fn: quote! {
+            pub fn parse_at_version_bincode(
+                version: &str,
+                bytes: &[u8],
+            ) -> ::core::result::Result<AnyVersion, ::polyvers::Error> {
+                match version {
+                    #(#parse_arms)*
+                    other => ::core::result::Result::Err(
+                        ::polyvers::Error::unknown_version(other, VERSIONS)
+                    ),
+                }
+            }
+        },
+        serialize_method: quote! {
+            pub fn to_bincode_bytes(&self) -> ::core::result::Result<::std::vec::Vec<u8>, ::polyvers::Error> {
+                match self {
+                    #(#ser_arms)*
+                }
+            }
+        },
+    }
+}
+
+fn emit_postcard(decl: &CodecDecl, versions: &[ResolvedVersion], main: &Ident) -> CodecArtifact {
+    if !cfg!(feature = "postcard-1") {
+        return emit_missing_feature(decl.span, "postcard", "postcard-1", &["postcard-1"]);
+    }
+    let parse_arms = versions.iter().map(|v| {
+        let variant = pascal_variant_for(&v.module_ident);
+        let module = &v.module_ident;
+        let value = v.version.value();
+        quote! {
+            #value => ::postcard::from_bytes::<#module::#main>(bytes)
+                .map(AnyVersion::#variant)
+                .map_err(::polyvers::Error::format),
+        }
+    });
+    let ser_arms = versions.iter().map(|v| {
+        let variant = pascal_variant_for(&v.module_ident);
+        quote! {
+            AnyVersion::#variant(value) => ::postcard::to_allocvec(value)
+                .map_err(::polyvers::Error::format),
+        }
+    });
+    CodecArtifact {
+        parse_fn: quote! {
+            pub fn parse_at_version_postcard(
+                version: &str,
+                bytes: &[u8],
+            ) -> ::core::result::Result<AnyVersion, ::polyvers::Error> {
+                match version {
+                    #(#parse_arms)*
+                    other => ::core::result::Result::Err(
+                        ::polyvers::Error::unknown_version(other, VERSIONS)
+                    ),
+                }
+            }
+        },
+        serialize_method: quote! {
+            pub fn to_postcard_bytes(&self) -> ::core::result::Result<::std::vec::Vec<u8>, ::polyvers::Error> {
+                match self {
+                    #(#ser_arms)*
+                }
+            }
+        },
+    }
+}
+
+fn emit_missing_feature(
+    span: proc_macro2::Span,
+    codec: &str,
+    default_feature: &str,
+    all_features: &[&str],
+) -> CodecArtifact {
+    let feature_list = all_features
+        .iter()
+        .map(|f| format!("`{f}`"))
+        .collect::<Vec<_>>()
+        .join(" or ");
+    let message = format!(
+        "polyvers: `codec {codec};` requires one of the {feature_list} features on the \
+         `polyvers` crate. Add `features = [\"{default_feature}\"]` to your Cargo.toml \
+         dependency on `polyvers`."
+    );
+    let err = syn::Error::new(span, message).to_compile_error();
+    CodecArtifact {
+        parse_fn: err.clone(),
+        serialize_method: err,
     }
 }
 

@@ -34,4 +34,19 @@ impl Error {
     {
         Self::Format(Box::new(err))
     }
+
+    /// Wrap any displayable value as a `Format` variant. Used by generated
+    /// code for codecs whose error types do not implement `std::error::Error`
+    /// (notably some `rkyv` 0.7 validation errors).
+    pub fn format_str<S: Into<String>>(message: S) -> Self {
+        #[derive(Debug)]
+        struct StringError(String);
+        impl std::fmt::Display for StringError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
+        impl std::error::Error for StringError {}
+        Self::Format(Box::new(StringError(message.into())))
+    }
 }

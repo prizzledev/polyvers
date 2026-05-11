@@ -3,12 +3,13 @@ use std::collections::{HashMap, HashSet};
 use proc_macro2::Span;
 use syn::{Attribute, Ident, LitStr, Path, Type};
 
-use crate::parse::{MetaInit, StructDef, StructItem, VersionDef, VersionedSpec};
+use crate::parse::{CodecDecl, MetaInit, StructDef, StructItem, VersionDef, VersionedSpec};
 
 pub struct ResolvedSpec {
     pub family: Ident,
     pub derives: Vec<Path>,
     pub meta_type: Option<Path>,
+    pub codecs: Vec<CodecDecl>,
     pub versions: Vec<ResolvedVersion>,
 }
 
@@ -142,6 +143,7 @@ pub fn resolve(spec: VersionedSpec) -> Result<ResolvedSpec, syn::Error> {
         family: spec.family,
         derives: spec.derives,
         meta_type: spec.meta_type,
+        codecs: spec.codecs,
         versions: resolved,
     })
 }

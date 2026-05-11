@@ -10,12 +10,37 @@ mod kw {
     syn::custom_keyword!(extends);
     syn::custom_keyword!(derive);
     syn::custom_keyword!(meta);
+    syn::custom_keyword!(codec);
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Codec {
+    Rkyv,
+    Bincode,
+    Postcard,
+}
+
+impl Codec {
+    pub fn ident_str(&self) -> &'static str {
+        match self {
+            Codec::Rkyv => "rkyv",
+            Codec::Bincode => "bincode",
+            Codec::Postcard => "postcard",
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct CodecDecl {
+    pub codec: Codec,
+    pub span: Span,
 }
 
 pub struct VersionedSpec {
     pub family: Ident,
     pub derives: Vec<Path>,
     pub meta_type: Option<Path>,
+    pub codecs: Vec<CodecDecl>,
     pub versions: Vec<VersionDef>,
 }
 
@@ -112,6 +137,41 @@ impl Parse for VersionedSpec {
             None
         };
 
+        let mut codecs: Vec<CodecDecl> = Vec::new();
+        if input.peek(kw::codec) {
+            let _: kw::codec = input.parse()?;
+            let names: Punctuated<Ident, Token![,]> = Punctuated::parse_separated_nonempty(input)?;
+            let _: Token![;] = input.parse()?;
+            let mut seen: std::collections::HashSet<&'static str> =
+                std::collections::HashSet::new();
+            for name in names {
+                let codec = match name.to_string().as_str() {
+                    "rkyv" => Codec::Rkyv,
+                    "bincode" => Codec::Bincode,
+                    "postcard" => Codec::Postcard,
+                    other => {
+                        return Err(syn::Error::new(
+                            name.span(),
+                            format!(
+                                "unknown codec `{other}`; supported codecs are `rkyv`, \
+                                 `bincode`, `postcard`"
+                            ),
+                        ));
+                    }
+                };
+                if !seen.insert(codec.ident_str()) {
+                    return Err(syn::Error::new(
+                        name.span(),
+                        format!("codec `{}` listed more than once", codec.ident_str()),
+                    ));
+                }
+                codecs.push(CodecDecl {
+                    codec,
+                    span: name.span(),
+                });
+            }
+        }
+
         let mut versions = Vec::new();
         while !input.is_empty() {
             versions.push(input.parse::<VersionDef>()?);
@@ -123,6 +183,7 @@ impl Parse for VersionedSpec {
             family,
             derives,
             meta_type,
+            codecs,
             versions,
         })
     }
@@ -414,6 +475,64 @@ mod tests {
         };
         let err = syn::parse2::<VersionedSpec>(tokens).err().unwrap();
         assert!(err.to_string().contains("duplicate"));
+    }
+
+    #[test]
+    fn parses_single_codec_clause() {
+        let tokens = quote! {
+            family x;
+            codec rkyv;
+            version "0.1" { struct M { a: u32 } }
+        };
+        let spec: VersionedSpec = syn::parse2(tokens).expect("parses");
+        assert_eq!(spec.codecs.len(), 1);
+        assert!(matches!(spec.codecs[0].codec, Codec::Rkyv));
+    }
+
+    #[test]
+    fn parses_multiple_codecs_clause() {
+        let tokens = quote! {
+            family x;
+            codec rkyv, bincode, postcard;
+            version "0.1" { struct M { a: u32 } }
+        };
+        let spec: VersionedSpec = syn::parse2(tokens).expect("parses");
+        assert_eq!(spec.codecs.len(), 3);
+        assert!(matches!(spec.codecs[0].codec, Codec::Rkyv));
+        assert!(matches!(spec.codecs[1].codec, Codec::Bincode));
+        assert!(matches!(spec.codecs[2].codec, Codec::Postcard));
+    }
+
+    #[test]
+    fn rejects_unknown_codec() {
+        let tokens = quote! {
+            family x;
+            codec nope;
+            version "0.1" { struct M { a: u32 } }
+        };
+        let err = syn::parse2::<VersionedSpec>(tokens).err().unwrap();
+        assert!(err.to_string().contains("unknown codec"));
+    }
+
+    #[test]
+    fn rejects_duplicate_codec() {
+        let tokens = quote! {
+            family x;
+            codec rkyv, rkyv;
+            version "0.1" { struct M { a: u32 } }
+        };
+        let err = syn::parse2::<VersionedSpec>(tokens).err().unwrap();
+        assert!(err.to_string().contains("more than once"));
+    }
+
+    #[test]
+    fn no_codec_clause_defaults_to_empty() {
+        let tokens = quote! {
+            family x;
+            version "0.1" { struct M { a: u32 } }
+        };
+        let spec: VersionedSpec = syn::parse2(tokens).expect("parses");
+        assert!(spec.codecs.is_empty());
     }
 
     #[test]
